@@ -1,0 +1,526 @@
+---
+title: "Annexes lexique SushiShop Vieux Lille"
+output: 
+  word_document: 
+    toc: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+Ce fichier [systématise]{.ul} la création d'un lexique à partir d'un ensemble de textes courts rassemblés dans un fichiers csv.
+
+Ici on reprend les 133 avis sur Le restaurant sushishop Vieux Lille collectées sur Tripadvisor.
+
+```{r packages nécessaires, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+
+install.packages("tm")
+install.packages("qdap")
+install.packages("knitr")
+install.packages("ggplot2")
+install.packages("ggthemes")
+install.packages("wordcloud")
+
+```
+
+# 1. Importer la base
+
+Ici, il s'agit :
+
+-   d'indiquer le répertoire de travail,
+
+-   de spécifier qu'il ne faut pas confondre caractères et modalités d'une variable catégorielle
+
+-   et d'importer un fichier csv dans R de manière à créer un corpus.
+
+On vérifie que l'importation s'est convenablement réalisée en demandant le nombre de lignes (le nombre de courts textes), le nom des colonnes et les premières lignes du corpus.
+
+```{r import}
+
+setwd("C:/Users/REDA/Desktop/ADT")
+
+options(stringsAsFactors=F)
+
+mabase <- read.csv2(file="avis_sushishop_vl.csv", encoding="latin1")
+
+nrow(mabase)
+names(mabase)
+head(mabase)
+statistique <- summary(nchar(mabase$Avis))
+statistique
+```
+
+# 2. Nettoyer les textes du corpus
+
+Les textes d'avis collectés sur Internet sont toujours plein de fautes (orthographe) et, quel que soit le texte, tous les mots ne nous intéressent pas (il s'agit des mots-outils).
+
+Pour nettoyer les textes, nous allons utiliser deux packages d'analyse textuelle : *tm* et *qdap*.
+
+```{r warning=FALSE, include=FALSE}
+library(tm)
+library(qdap)
+```
+
+## 2.3. Modifier le corpus de textes
+
+On enlève du corpus tous les mots-outils du dictionnaire modifié. On importe le dictionnaire sous format csv, on obtient une base dico. Cela a pour avantage de définir sans ambiguïté en "latin1" le vecteur / la colonne dico[,1] de mots-outils (comme déjà les textes de *mabase)*.
+
+```{r enlever les mots outils}
+dico <- read.csv2(file="mots_outils_perso.csv", encoding="latin1")
+# on met les textes en minuscules car les mots outils sont en minuscules
+mabase$Avis <- tolower(mabase$Avis)
+
+# on enlève les mots outils
+mabase$Avis <- removeWords(mabase$Avis, dico[,1])
+
+```
+
+Il est pratique d'enlever toutes les lettres accentuées (les cédilles, etc.). En particulier dans des avis sur Internet, beaucoup de mots sont écrits avec ou sans accents. Du coup, en enlevant tous les accents, on uniformise le corpus... même si à terme cela peut compliquer la lecture.
+
+Enlever les ponctuations.
+
+Pour l'analyse de textes publiés, normalement sans faute ni coquille, cette opération est moins utile.
+
+```{r enlever les accents}
+
+Unaccent <- function(Z) {
+  Z <- gsub("['`^~\"]", " ", Z)
+  Z <- iconv(Z, to="ASCII//TRANSLIT//IGNORE")
+  Z <- gsub("['`^~\"]", "", Z)
+  return(Z)
+}
+mabase$Avis <- Unaccent(mabase$Avis)
+#enkever les ponctuations
+mabase$Avis <- removePunctuation(mabase$Avis)
+#créer deux selection selon la qualité d'avis : excellent , horrible 
+
+Ex<- mabase[mabase$niveau=="excellent",]
+Hor<-mabase[mabase$niveau=="horrible",]
+
+Exl=data.frame(Ex)
+Horr=data.frame(Hor)
+```
+
+Après avoir extraire deux sous bases : Avis excellent , Avis Horrible
+
+Maintenant, on crée un premier les lexiques "brouillon" (lexic0) qui va nous permettre de repérer les erreurs qu'il faudra corriger ensuite.
+
+Pour cela, il faut créer :
+
+-   un objet *corpus* du package *tm,*
+
+-   puis le tableau lexical entier (dit *tdm* pour *"term document matrix"*)
+
+-   et enfin le lexique avec le calcul des fréquences.
+
+```{r corpus, tableau lexical entier et lexique }
+# on transforme Avis en table
+y <- data.frame(doc_id=seq(1:nrow(mabase)), text=mabase$Avis)
+yex <- data.frame(doc_id=seq(1:nrow(Exl)), text=Exl$Avis)
+yhor <- data.frame(doc_id=seq(1:nrow(Horr)), text=Horr$Avis)
+# puis on crée l'objet corpus 
+corpus <- SimpleCorpus(DataframeSource(y), control = list(language = "fr"))
+corpus_yex <- SimpleCorpus(DataframeSource(yex), control = list(language = "fr"))
+corpus_yhor<- SimpleCorpus(DataframeSource(yhor), control = list(language = "fr"))
+# on enlève les blancs inutiles (deux à la suite, etc.)
+corpus <- tm_map(corpus, stripWhitespace)
+corpus_yex <- tm_map(corpus_yex, stripWhitespace)
+corpus_yhor <- tm_map(corpus_yhor, stripWhitespace)
+# on enlève les nombres en chiffres
+corpus <- tm_map(corpus, removeNumbers)
+corpus_yex <- tm_map(corpus_yex, removeNumbers)
+corpus_yhor <- tm_map(corpus_yhor, removeNumbers)
+
+# on vérifie la lecture de l'avis 98
+as.list(corpus)[98]
+
+# on crée le tableau lexical entier
+tdm <-TermDocumentMatrix(corpus)
+tdm_yex <-TermDocumentMatrix(corpus_yex)
+tdm_yhor <-TermDocumentMatrix(corpus_yhor)
+# on le transforme en objet matrice pour faire des calculs de fréquences
+tdm.mat <-as.matrix(tdm)
+tdm.mat_yex <-as.matrix(tdm_yex)
+tdm.mat_yhor <-as.matrix(tdm_yhor)
+
+# la dimension de la matrice nous renseigne sur le nombre de mots (formes) repérés dans le corpus
+dim(tdm.mat)
+dim(tdm.mat_yex)
+dim(tdm.mat_yhor)
+
+# pour obtenir la fréquence d'un mot on somme ses occurences dans le tableau lexical entier (calcul possible car on l'a transformé en un objet matrice)
+term.freq <- rowSums(tdm.mat)
+term.freq_yex <- rowSums(tdm.mat_yex)
+term.freq_yhor <- rowSums(tdm.mat_yhor)
+
+# on crée la table lexique avec deux colonnes/variables : mot et freq
+lexic0 <-data.frame(mot=names(term.freq), freq=term.freq)
+lexic0_yex <-data.frame(mot=names(term.freq_yex), freq=term.freq_yex)
+lexic0_yhor <-data.frame(mot=names(term.freq_yhor), freq=term.freq_yhor)
+
+write.table(lexic0,"lexic0.csv", sep=";",row.names = F, col.names = T)
+write.table(lexic0_yex,"lexic0_yex.csv", sep=";",row.names = F, col.names = T)
+write.table(lexic0_yhor,"lexic0_yhor.csv", sep=";",row.names = F, col.names = T)
+```
+
+on repère les chaînes de caractères avec un problème.
+
+On constate que beaucoup d'erreurs viennent du fait que cette méthode ne reconnaît que l'espace comme moyen de délimiter les formes lexicales. Quand dans le texte, il n'y a pas d'espace après une virgule, les deux mots avant et après la virgule ne font qu'une seule forme lexicale avec une virgule au milieu.
+
+```{r corrections}
+
+problemes <- c("sushis","adoooore","apparament","apparrement,.","appele","aurevoir","aventuree","avocat,saumon","/makis","bol","bols","bolw","bolws","bon,service","dessert.teste","edaname","ensemble.accueil","heureusement...message","jamais,surtout","makis/sushis/sashimis","moyen,plateau","ptit","puisqu","qualite/prix","quemander","qumqats","ramolo","shop...bon","suspect...mangue")
+
+corrections <- c("sushi","adore","apparement","apparement","appel","au revoir","aventure","avocat saumon","makis","bowl","bowls","bowl","bowls","bon service","dessert teste","edamame","ensemble acceuil","heureusement message","jamais surtout","makis sushis sashimis","moyen plateau","petit","puisque","qualite-prix","commander","kumquat","ramollo","shop bon","suspect mangue")
+
+mabase$Avis <- mgsub(problemes,corrections,mabase$Avis)
+Exl$Avis <- mgsub(problemes,corrections,Exl$Avis)
+Hor$Avis <- mgsub(problemes,corrections,Horr$Avis)
+
+```
+
+# 3. Les lexiques
+
+-   On enlève les ponctuations.
+
+-   Aux mots du lexique - en majuscules - on associe leur racine
+
+```{r corpus, tableau lexical entier et lexique def}
+# on transforme Avis en table
+y <- data.frame(doc_id=seq(1:nrow(mabase)), text=mabase$Avis)
+yex <- data.frame(doc_id=seq(1:nrow(Exl)), text=Exl$Avis)
+yhor <- data.frame(doc_id=seq(1:nrow(Horr)), text=Horr$Avis)
+
+# puis on crée l'objet corpus 
+corpus <- SimpleCorpus(DataframeSource(y), control = list(language = "fr"))
+corpus_yex <- SimpleCorpus(DataframeSource(yex), control = list(language = "fr"))
+corpus_yhor<- SimpleCorpus(DataframeSource(yhor), control = list(language = "fr"))
+
+# on enlève les blancs inutiles (deux à la suite, etc.)
+corpus <- tm_map(corpus, stripWhitespace)
+corpus_yex <- tm_map(corpus_yex, stripWhitespace)
+corpus_yhor <- tm_map(corpus_yhor, stripWhitespace)
+
+# on enlève les nombres en chiffres
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, removeNumbers)
+corpus_yex <- tm_map(corpus_yex, removeNumbers)
+corpus_yhor <- tm_map(corpus_yhor, removeNumbers)
+
+# on enlève la ponctuation
+corpus <- tm_map(corpus, removePunctuation)
+corpus_yex <- tm_map(corpus_yex, removePunctuation)
+corpus_yhor <- tm_map(corpus_yhor, removePunctuation)
+
+# on crée le tableau lexical entier
+tdm <-TermDocumentMatrix(corpus)
+tdm_yex <-TermDocumentMatrix(corpus_yex)
+tdm_yhor <-TermDocumentMatrix(corpus_yhor)
+
+# on le transforme en objet matrice pour faire des calculs de fréquences
+tdm.mat <-as.matrix(tdm)
+tdm.mat_yex <-as.matrix(tdm_yex)
+tdm.mat_yhor <-as.matrix(tdm_yhor)
+
+# la dimension de la matrice nous renseigne sur le nombre de mots (formes) repérés dans le corpus
+dim(tdm.mat)
+dim(tdm.mat_yex)
+dim(tdm.mat_yhor)
+
+# pour obtenir la fréquence d'un mot on somme ses occurences dans le tableau lexical entier (calcul possible car on l'a transformé en un objet matrice)
+term.freq <- rowSums(tdm.mat)
+term.freq_yex <- rowSums(tdm.mat_yex)
+term.freq_yhor <- rowSums(tdm.mat_yhor)
+
+# on crée la table lexique avec trois colonnes/variables : mot (en majuscules), racine et freq
+word <- names(term.freq)
+word_yex <- names(term.freq_yex)
+word_yhor <- names(term.freq_yhor)
+
+# on repère la racine des mots 
+racine <- stemDocument(word, language = "french")
+racine_yex <- stemDocument(word_yex , language = "french")
+racine_yhor <- stemDocument(word_yhor, language = "french")
+
+# on met les mots entiers en majuscules
+lexique <-data.frame(mot=toupper(word), racine, freq=term.freq)
+lexique_Excellent <-data.frame(mot=toupper(word_yex),racine_yex, freq=term.freq_yex)
+lexique_Horrible <-data.frame(mot=toupper(word_yhor), racine_yhor, freq=term.freq_yhor)
+
+# on sauvegarde le lexique pour être lu et travaillé sous excel
+write.table(lexique,"lexique.csv", sep=";",row.names = F, col.names = T)
+write.table(lexique_Excellent,"lexique_Excellent.csv", sep=";",row.names = F, col.names = T)
+write.table(lexique_Horrible,"lexique_Horrible.csv", sep=";",row.names = F, col.names = T)
+```
+
+On peut ajouter les fréquences des mots racines. Cela permet par exemple de faire remonter tous les termes qui évoquent ce qui est "petit" (qui englobent toutes les formes fléchies : petit, petits, petite, petites)
+
+```{r fréquence racines}
+
+corpus2 <- tm_map(corpus, stemDocument)
+corpus2_yex <- tm_map(corpus_yex, stemDocument)
+corpus2_yhor <- tm_map(corpus_yhor, stemDocument)
+
+tdm2 <-TermDocumentMatrix(corpus2)
+tdm2_yex <-TermDocumentMatrix(corpus2_yex)
+tdm2_yhor <-TermDocumentMatrix(corpus2_yhor)
+
+tdm2.avis <-as.matrix(tdm2)
+tdm2.avis_yex <-as.matrix(tdm2_yex)
+tdm2.avis_yhor <-as.matrix(tdm2_yhor)
+
+dim(tdm2.avis)
+dim(tdm2.avis_yex)
+dim(tdm2.avis_yhor)
+
+term.freq <- rowSums(tdm2.avis)
+term.freq_yex <- rowSums(tdm2.avis_yex)
+term.freq_yhor <- rowSums(tdm2.avis_yhor)
+
+f_racines <-data.frame(racine=names(term.freq), freq=term.freq)
+f_racines_yex <-data.frame(racine=names(term.freq_yex), freq=term.freq_yex)
+f_racines_yhor <-data.frame(racine=names(term.freq_yhor), freq=term.freq_yhor)
+```
+
+Imprimons les lignes des lexiques .
+
+```{r tableau lexique}
+
+library(knitr) 
+
+# on trie lexique par odre décroissant des valeurs de la 3e colonne, freq
+lexique <- lexique[order(lexique[,3], decreasing=T),]
+lexique_Excellent <- lexique_Excellent[order(lexique_Excellent[,3], decreasing=T),]
+lexique_Horrible <- lexique_Horrible[order(lexique_Horrible[,3], decreasing=T),]
+
+impression <- lexique[which(lexique$freq > 19 ) ,]
+impression_Excellent <- lexique_Excellent[which(lexique_Excellent$freq >5 ) ,] 
+impression_Horrible <- lexique_Horrible[which(lexique_Horrible$freq > 5 ) ,] 
+
+
+knitr::kable(impression)
+knitr::kable(impression_Excellent)
+knitr::kable(impression_Horrible)
+```
+
+On produit aussi le tableau des racines de mots.
+
+```{r tableau racines}
+
+# on trie f_racines par odre décroissant des valeurs de la 2e colonne, freq
+f_racines <- f_racines[order(f_racines[,2], decreasing=T),]
+f_racines_yex <- f_racines_yex[order(f_racines_yex[,2], decreasing=T),]
+f_racines_yhor <- f_racines_yhor[order(f_racines_yhor[,2], decreasing=T),]
+
+impress <- f_racines[which(f_racines$freq > 19 ) ,] 
+impress_Excellent <- f_racines_yex[which(f_racines_yex$freq > 3 ) ,] 
+impression_Horrible <- f_racines_yhor[which(f_racines_yhor$freq > 5 ) ,] 
+
+knitr::kable(impress)
+knitr::kable(impress_Excellent)
+knitr::kable(impression_Horrible)
+
+```
+
+# 4. Représentations graphiques
+
+On charge les packages suivants.
+
+```{r}
+
+library(ggplot2)
+library(ggthemes)
+library(wordcloud)
+```
+
+## 4.1. Histogrammes des fréquences
+
+```{r histogramme lexique, fig.height=7, fig.width=5}
+
+# tri de lexique par odre décroissant des valeurs de la 3e colonne, freq
+lexique <- lexique[order(lexique[,3], decreasing=T),]
+lexique_Excellent <- lexique_Excellent[order(lexique_Excellent[,3], decreasing=T),]
+lexique_Horrible <- lexique_Horrible[order(lexique_Horrible[,3], decreasing=T),]
+
+# création d'une nouvelle table lexfreq avec :
+# transformation de la variable "mot" (chaînes de caractères) en une variable "mot" catégorielle dont chaque modalité reprend exactement la forme des mots du lexique
+
+lexfreq <- lexique
+lexfreq$mot <- factor(lexfreq$mot, levels=unique(as.character(lexfreq$mot)))
+
+lexfreq_yex <- lexique_Excellent
+lexfreq_yex$mot <- factor(lexfreq_yex$mot, levels=unique(as.character(lexfreq_yex$mot)))
+
+lexfreq_yhor <- lexique_Horrible
+lexfreq_yhor$mot <- factor(lexfreq_yhor$mot, levels=unique(as.character(lexfreq_yhor$mot)))
+
+
+
+ggplot(lexfreq[1:30,], aes(x=mot, y=freq))+geom_bar(stat="identity",
+fill='blue')+coord_flip()+theme_gdocs()+geom_text(aes(label=freq),
+colour="white",hjust=1.25, size=5.0)
+
+ggplot(lexfreq_yex[1:30,], aes(x=mot, y=freq))+geom_bar(stat="identity",
+fill='black')+coord_flip()+theme_gdocs()+geom_text(aes(label=freq),
+colour="white",hjust=1.25, size=5.0)
+
+ggplot(lexfreq_yhor[1:30,], aes(x=mot, y=freq))+geom_bar(stat="identity",
+fill='grey')+coord_flip()+theme_gdocs()+geom_text(aes(label=freq),
+colour="black",hjust=1.25, size=5.0)
+
+```
+
+Même chose pour créer un histogramme des racines .
+
+```{r histogramme racines, fig.height=7, fig.width=5}
+
+f_racines <- f_racines[order(f_racines[,2], decreasing=T),]
+f_racines_yex <- f_racines_yex[order(f_racines_yex[,2], decreasing=T),]
+f_racines_yhor <- f_racines_yhor[order(f_racines_yhor[,2], decreasing=T),]
+
+f_rac <- f_racines
+f_rac$racine<-factor(f_rac$racine, levels=unique(as.character(f_rac$racine)))
+f_rac_yex <- f_racines_yex
+f_rac_yex$racine<-factor(f_rac_yex$racine, levels=unique(as.character(f_rac_yex$racine)))
+f_rac_yhor <- f_racines_yhor
+f_rac_yhor$racine<-factor(f_rac_yhor$racine, levels=unique(as.character(f_rac_yhor$racine)))
+
+ggplot(f_rac[1:30,], aes(x=racine, y=freq))+geom_bar(stat="identity",
+fill='green')+coord_flip()+theme_gdocs()+geom_text(aes(label=freq),
+colour="black",hjust=1.25, size=5.0)
+ggplot(f_rac_yex[1:30,], aes(x=racine, y=freq))+geom_bar(stat="identity",
+fill='black')+coord_flip()+theme_gdocs()+geom_text(aes(label=freq),
+colour="grey",hjust=1.25, size=5.0)
+ggplot(f_rac_yhor[1:30,], aes(x=racine, y=freq))+geom_bar(stat="identity",
+fill='grey')+coord_flip()+theme_gdocs()+geom_text(aes(label=freq),
+colour="white",hjust=1.25, size=5.0)
+
+
+```
+
+## 4.2. Le nuage de mots
+
+```{r fig.height=6, fig.width=6, message=FALSE, warning=FALSE}
+
+library(wordcloud)
+
+lexfreq <- lexique
+# on passe en minuscules, plus lisible dans un nuage de mots
+lexfreq$mot <- tolower(lexfreq$mot)
+
+wordcloud(lexfreq$mot,lexfreq$freq, max.words = 200, random.order=FALSE, colors=c('black','darkred'))
+
+
+```
+
+Même chose avec les racines
+
+```{r fig.height=6, fig.width=6}
+
+pal <- brewer.pal(8, "Greens")
+pal <- pal[-(1:4)]
+
+wordcloud(f_racines$racine,f_racines$freq, max.words = 200, random.order=FALSE, colors=pal)
+```
+
+# 5. Visualiser les associations entre mots
+
+## 5.1. Calculer les coefficients de corrélation
+
+```{r visualiser des extraits du TLE}
+tdm.mat[1:20,1:10]
+tdm.mat_yex[1:20,1:10]
+tdm.mat_yhor[1:20,1:10]
+
+
+#tdm.mat["commande",]
+#tdm.mat["livraison",]
+#tdm.mat["acceuil",]
+#tdm.mat["emporter",]
+```
+
+Pour quantifier l'association entre deux mots, on calcule le coefficient de corrélation.
+
+```{r calcul association}
+
+motA <- tdm.mat["commande",] 
+motB <- tdm.mat["livraison",] 
+
+AssociationAB <- cor(motA,motB)
+AssociationAB
+```
+
+On construit aisément une matrice de corrélation entre un ensemble de mots.
+
+```{r}
+listmots <- c("sushi", "commande", "livraison", "qualite", "accueil","plus")
+extrait <- tdm.mat[listmots,]
+extrait <- t(extrait)
+
+mat.cor <- cor(extrait)
+
+library(knitr) 
+knitr::kable(round(mat.cor, 2)) # round(x, 2) = arrondir la valeur x à 2 chiffres après la virgule
+```
+
+```{r les mots associés à un mot donné}
+associations <- findAssocs(tdm, 'qualite', 0.3)
+MotsAssoc <- as.data.frame(associations)
+MotsAssoc$termes <- row.names(MotsAssoc)
+MotsAssoc$termes <- factor(MotsAssoc$termes, levels=MotsAssoc$termes)
+```
+
+La même information sous forme d'un graphique :
+
+```{r graph des coef de corrélation, fig.height=5, fig.width=5}
+
+ggplot(MotsAssoc, aes(y=termes)) +
+geom_point(aes(x=qualite), data=MotsAssoc,
+size=3)+
+theme_gdocs()+ geom_text(aes(x=qualite,label=qualite), colour= "#660033", 
+hjust=-.25,size=4)+theme(text=element_text(size=10),
+axis.title.y=element_blank())
+```
+
+## 5.2. Représenter les associations sous forme d'un réseau
+
+Pour que le réseau soit lisible, il faut diminuer le nombre de mots. On va garder les mots les plus fréquents. Pour cela :
+
+```{r diminuer la matrice des mots du réseau}
+tdm.mat2 <- data.frame(tdm.mat)
+
+tdm.mat2$tot <- rowSums(tdm.mat2) 
+
+tdm.mat2 <- tdm.mat2[order(tdm.mat2$tot, decreasing=T),]
+
+tdm.mat2 <- as.matrix(tdm.mat2[1:8,1:20])
+
+```
+
+on crée le réseau.
+
+```{r fig.height=6, fig.width=6}
+# install.packages("igraph")
+library(igraph)
+
+tableau.adj <- tdm.mat2 %*% t(tdm.mat2) # produit de la matrice avec elle-même (transposée)
+tableau.adj <- graph.adjacency(tableau.adj, weighted=TRUE, 
+                               mode="undirected", diag=T)
+tableau.adj<-simplify(tableau.adj) # élimine les arêtes redondantes
+
+plot.igraph(tableau.adj, vertex.shape="none",
+vertex.label.font=2, vertex.label.color="darkblue",
+vertex.label.cex=.7, edge.color="darkgrey")
+title(main='Petit réseau de mots')
+```
+
+## 5.3. Regrouper les mots par classification ascendante hiérarchique
+
+```{r dendrogramme, fig.height=8, fig.width=12}
+
+tdm.reduit <- removeSparseTerms(tdm, sparse=0.95)
+
+arbre <- hclust(dist(tdm.reduit, method="euclidean"), method="complete")
+
+plot(arbre, main='Arborescence')
+
+```
